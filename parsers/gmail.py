@@ -40,8 +40,12 @@ def get_email_body(message):
 def parse(extract_dir):
     """
     Scans for .mbox archives and yields standardized dictionaries.
-    Expected output format: {"platform": str, "timestamp": float, "sender": str, "content": str, "type": str}
+    Includes built-in heuristic filtering to drop marketing and automated emails.
+    Expected output: {"platform": str, "timestamp": float, "sender": str, "content": str, "type": str}
     """
+    # Automated senders to immediately drop
+    junk_senders = ['noreply', 'no-reply', 'newsletter', 'marketing', 'support', 'info@', 'sales@']
+
     for root, _, files in os.walk(extract_dir):
         for file in files:
             # Google Takeout exports mail as massive .mbox files
@@ -60,6 +64,11 @@ def parse(extract_dir):
                     if not sender or not date_str:
                         continue
 
+                    # --- Noise Filter: Sender Level ---
+                    sender_lower = str(sender).lower()
+                    if any(junk in sender_lower for junk in junk_senders):
+                        continue
+
                     try:
                         # Convert RFC 2822 email date string to a standard Unix timestamp
                         dt = parsedate_to_datetime(date_str)
@@ -71,8 +80,9 @@ def parse(extract_dir):
 
                     content = get_email_body(message)
 
-                    # Skip empty emails (e.g., emails that only contained images or HTML)
-                    if not content:
+                    # --- Noise Filter: Content Level ---
+                    # Skip empty emails, image-only emails, or promotional broadcasts
+                    if not content or "unsubscribe" in content.lower() or "view in browser" in content.lower():
                         continue
 
                     yield {

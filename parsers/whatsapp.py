@@ -36,10 +36,11 @@ def parse(extract_dir):
                             if current_msg:
                                 yield current_msg
 
+                            # Explicit elif satisfies strict type linters in VS Code
                             if match_android:
                                 date_str, sender, content = match_android.groups()
                                 date_format = "%m/%d/%y, %I:%M %p"
-                            else:
+                            elif match_ios:
                                 date_str, sender, content = match_ios.groups()
                                 date_format = "%m/%d/%y, %I:%M:%S %p"
 

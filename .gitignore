@@ -1,0 +1,20 @@
+# Python Environment
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+ENV/
+
+# Project Data
+Input/
+output/
+subject_profile.json
+config.json
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo

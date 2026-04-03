@@ -1,67 +1,75 @@
+import json
+import os
 import re
 
-# 1. First-person pronouns (Self-reflection)
-SELF_REF = re.compile(r'\b(i|me|my|mine|myself)\b', re.IGNORECASE)
-
-# 2. Cognitive, emotional, and psychological state words
-PSYCH_WORDS = re.compile(
-    r'\b(feel|felt|think|thought|believe|want|need|love|hate|wish|hope|afraid|'
-    r'sad|angry|mad|worried|anxious|stressed|dream|remember|forget|hurt|happy|'
-    r'confused|overwhelmed|proud|guilty|shame)\b', 
-    re.IGNORECASE
-)
-
-# 3. Transactional, logistical, and spam/scam markers
-NOISE_WORDS = re.compile(
-    r'\b(is this still available|asking price|firm on price|cash only|venmo|'
-    r'tracking number|shipping|order confirmed|your receipt|account suspended|'
-    r'click here|limited time|guarantee|wire transfer|gift card)\b', 
-    re.IGNORECASE
-)
-
-def evaluate_psych_signal(text):
+def evaluate_psych_signal(content, sender, config, subject_identifiers=None):
     """
-    Evaluates a message for psychological density and rejects transactional noise.
-    Returns a float score, and a boolean indicating if it passes the threshold.
+    Mult-stage behavioral filter.
+    1. Aggressive Spam/Newsletter Rejector
+    2. Business/Utility Logic (High Priority Records)
+    3. Personal Psychological Density (Interaction Logic)
     """
-    if not text:
-        return 0.0, False
-        
-    # --- NOISE CHECK (The Gatekeeper) ---
-    # If the message contains explicit transactional or scam phrases, instantly reject it.
-    if len(NOISE_WORDS.findall(text)) > 0:
-        return 0.0, False 
-
-    words = text.split()
-    word_count = len(words)
+    content_lower = content.lower()
+    word_count = len(content_lower.split())
     
-    # 1. The Bouncer: Immediate rejection for extremely short logistical texts (e.g., "Ok", "On my way")
-    if word_count < 4:
-        return 0.0, False
-        
+    # --- STAGE 1: THE JUNK GUILLOTINE ---
+    # Common markers of automated marketing/newsletters
+    junk_markers = [
+        'unsubscribe', 'view in browser', 'manage preferences', 
+        'privacy policy', 'all rights reserved', 'click here to',
+        'sent to you because', 'opt out'
+    ]
+    
+    # If it contains multiple junk markers, it's out
+    junk_hits = sum(1 for m in junk_markers if m in content_lower)
+    if junk_hits >= 2:
+        return 0.0, False, "spam"
+
+    # Stage 1b: Domain rejection (if possible to infer from sender)
+    if any(x in sender.lower() for x in ['no-reply', 'noreply', 'notifications@', 'marketing']):
+        # Still allow it if it's business high-signal (handled in Stage 2)
+        pass
+    
+    # --- STAGE 2: BUSINESS/UTILITY PASS ---
+    # High-signal keywords for life-records
+    utility_keywords = [
+        'receipt', 'confirmation', 'order', 'invoice', 'payment',
+        'statement', 'account created', 'security alert', 'login',
+        'tracking', 'shipped', 'delivered', 'appointment', 'reservation',
+        'subscription', 'banking', 'transaction', 'transfer'
+    ]
+    
+    is_utility = any(u in content_lower for u in utility_keywords)
+    if is_utility and word_count > 5:
+        # High score for utility records, they are forensics gold
+        return 8.0, True, "utility"
+
+    # --- STAGE 3: PERSONAL PSYCHOLOGICAL DENSITY ---
+    # Noise floor
+    if word_count < 4: return 0.0, False, "noise"
+
     score = 0.0
     
-    # 2. Length Bonus: Longer messages inherently contain more context
-    if word_count > 12: 
-        score += 1.0
-    if word_count > 30: 
-        score += 2.0
-        
-    # 3. Introspection Bonus: First-person framing
-    if SELF_REF.search(text):
-        score += 1.5
-        
-    # 4. Emotional/Cognitive Bonus: Internal state markers
-    # We count how many times they express an internal state
-    state_matches = len(PSYCH_WORDS.findall(text))
-    if state_matches > 0:
-        score += (state_matches * 2.0)
-        
-    # THRESHOLD: Decide what score makes a message "worth keeping".
-    # A score of 3.0 means it has to be either:
-    # A) Long (>30 words) + uses "I/Me"
-    # B) Uses an emotional word + uses "I/Me"
-    # C) Very long (>30 words) + no specific psych words but highly narrative
-    is_valuable = score >= 3.0
+    # Introspection and Emotional Weight
+    introspection = ['i', 'me', 'my', 'mine', 'myself']
+    emotional = ['feel', 'think', 'want', 'hope', 'wish', 'believe', 'love', 'hate', 'miss', 'sorry']
     
-    return score, is_valuable
+    # Identity Bonus (Is the subject talking?)
+    if subject_identifiers:
+        for ident in subject_identifiers:
+            if ident.lower() in sender.lower():
+                score += 3.0 # Heavy weight for self-authored content
+                break
+
+    score += sum(1.5 for w in content_lower.split() if w in introspection)
+    score += sum(2.0 for w in content_lower.split() if w in emotional)
+    
+    # Length Bonuses
+    if word_count > 12: score += 1.0
+    if word_count > 30: score += 2.0
+
+    min_score = config.get("filter_settings", {}).get("min_psych_score", 3.0)
+    
+    # Final check
+    is_valid = score >= min_score
+    return score, is_valid, "personal"

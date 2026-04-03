@@ -1,134 +1,207 @@
-import os
 import argparse
-import zipfile
+import json
+import os
 import shutil
+import uuid
+import zipfile
 from datetime import datetime, timezone
 
-# Import our custom engines and parsers
-from core import timeline, health, filter
-from parsers import (
-    facebook, whatsapp, gmail, 
-    gemini, copilot, chatgpt, 
-    google_fit, fitbit
+from core import filter, health, timeline
+from core.parsers import (
+    facebook, gemini, gmail, phone, snapchat, whatsapp, chatgpt, copilot
 )
 
-def extract_archives(input_dir, temp_dir):
-    """Unzips all archives in the input folder to a temporary directory."""
-    print("Extracting archives...")
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json")
+SUBJECT_FILE = os.path.join(SCRIPT_DIR, "subject_profile.json")
+
+def load_engine_config() -> dict:
+    defaults = {
+        "paths": {"input": "Input", "output": "output"},
+        "filter_settings": {"min_psych_score": 3.0, "vip_senders": [], "safe_keywords": []}
+    }
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                defaults.update(json.load(f))
+        except: pass
+    return defaults
+
+def load_subject_profile() -> dict:
+    defaults = {
+        "target_name": "Subject_Alpha",
+        "identifiers": ["subject@example.com", "subject_handle"],
+        "analysis_mode": "forensic"
+    }
+    if os.path.exists(SUBJECT_FILE):
+        try:
+            with open(SUBJECT_FILE, 'r', encoding='utf-8') as f:
+                defaults.update(json.load(f))
+        except: pass
+    else:
+        # Save defaults if not exists
+        with open(SUBJECT_FILE, 'w', encoding='utf-8') as f:
+            json.dump(defaults, f, indent=4)
+    return defaults
+
+def update_subject_profile(profile: dict):
+    with open(SUBJECT_FILE, 'w', encoding='utf-8') as f:
+        json.dump(profile, f, indent=4)
+
+def extract_archives(input_dir: str, temp_dir: str):
+    print(f"--- Phase 0: Extraction ---")
+    zip_count = 0
+    if not os.path.exists(input_dir): return
     for item in os.listdir(input_dir):
         if item.endswith('.zip'):
-            print(f" -> Unzipping {item}...")
-            with zipfile.ZipFile(os.path.join(input_dir, item), 'r') as z:
-                z.extractall(os.path.join(temp_dir, item.replace('.zip', '')))
+            zip_count += 1
+            print(f" [ZIP] Unzipping: {item}")
+            try:
+                with zipfile.ZipFile(os.path.join(input_dir, item), 'r') as z:
+                    z.extractall(os.path.join(temp_dir, item.replace('.zip', '')))
+            except Exception as e:
+                print(f" [ERROR] Could not unzip {item}: {e}")
+    if zip_count == 0:
+        print(" [!] No .zip files found in Input folder.")
+
+def get_behavioral_state(hr_val):
+    """Placeholder for physiological state mapping."""
+    if not hr_val: return "STABLE"
+    try:
+        hr = float(hr_val)
+        if hr > 100: return "ELEVATED"
+        if hr < 60: return "REPRESSED"
+        return "BASELINE"
+    except: return "UNKNOWN"
 
 def main():
-    parser = argparse.ArgumentParser(description="EgoWeaver: Unify digital exports into a multidimensional vector graph.")
-    parser.add_argument("--timeline", required=True, help="Path to Google Records.json")
-    parser.add_argument("--health", required=True, help="Folder containing raw wearable exports (Fitbit/Google Fit)")
-    parser.add_argument("--input", required=True, help="Folder containing .zip communication/AI exports")
-    parser.add_argument("--output", required=True, help="Directory to save the final Markdown files")
+    config = load_engine_config()
+    subject = load_subject_profile()
     
-    args = parser.parse_args()
+    args_input = config['paths'].get('input', 'Input')
+    args_output = config['paths'].get('output', 'output')
 
-    # 1. Build the Geospatial Engine
-    timeline_index = timeline.build_index(args.timeline)
-    if not timeline_index:
-        print("Fatal Error: Could not build timeline index. Exiting.")
-        return
+    # Ensure folders exist
+    for d in [args_input, args_output]:
+        os.makedirs(d, exist_ok=True)
+    for d in ['health', 'timeline']:
+        os.makedirs(os.path.join(args_input, d), exist_ok=True)
 
-    # 2. Build the Physiological Engine
-    print(f"\nScanning '{args.health}' for biometrics...")
-    raw_health_data = []
-    # We pass the raw health export folders directly to the parsers
-    raw_health_data.extend(list(google_fit.parse(args.health)))
-    raw_health_data.extend(list(fitbit.parse(args.health)))
-    health_index = health.build_health_index(raw_health_data)
-    print(f"Health index built with {len(health_index)} physiological data points.")
-
-    # 3. Prepare Directories
-    os.makedirs(args.output, exist_ok=True)
-    temp_dir = os.path.join(args.input, "_temp_extract")
+    # 1. SETUP & EXTRACTION
+    temp_dir = os.path.join(args_input, "_temp_extract")
     os.makedirs(temp_dir, exist_ok=True)
+    extract_archives(args_input, temp_dir)
 
-    extract_archives(args.input, temp_dir)
+    # 2. INDICES
+    print(f"\n--- Phase 1: Context Indexing ---")
+    p_time = os.path.join(args_input, "timeline")
+    p_health = os.path.join(args_input, "health")
+    
+    t_index = timeline.build_index(p_time, temp_dir)
+    h_index = health.build_health_index(p_health, temp_dir)
+    
+    print(f" [DATA] Timeline Index: {len(t_index)} points loaded.")
+    print(f" [DATA] Health Index: {len(h_index)} metrics loaded.")
 
-    # 4. Register Communication & AI Parsers
-    active_parsers = [
-        facebook.parse, 
-        whatsapp.parse, 
-        gmail.parse, 
-        gemini.parse, 
-        copilot.parse, 
-        chatgpt.parse
+    # 3. WEAVING
+    print(f"\n--- Phase 2: Weaving Behavioral Context ---")
+    parsers = [
+        (facebook.parse, "facebook"), (snapchat.parse, "snapchat"),
+        (gmail.parse, "gmail"), (gemini.parse, "gemini"),
+        (phone.parse, "phone"), (whatsapp.parse, "whatsapp"),
+        (chatgpt.parse, "chatgpt"), (copilot.parse, "copilot")
     ]
     
-# 5. The Weaving Process
-    total_files = 0
-    skipped_files = 0
-    print("\nStarting the weaving process...")
-    
-    for parse_func in active_parsers:
-        print(f"Running {parse_func.__module__.split('.')[-1]} parser...")
+    total_processed = 0
+    total_filtered = 0
+    new_identifiers_found = False
+
+    for parse_func, name in parsers:
+        p_dir = os.path.join(args_input, name)
+        targets = [d for d in [temp_dir, p_dir] if os.path.exists(d)]
         
-        for msg in parse_func(temp_dir):
-            
-            # --- THE NEW FILTER ---
-            # Only apply the filter to human messages (keep all AI prompts, as prompts are usually high-signal)
-            if msg['type'] == 'message':
-                psych_score, is_valuable = filter.evaluate_psych_signal(msg['content'])
-                if not is_valuable:
-                    skipped_files += 1
+        parser_count = 0
+        for d in targets:
+            for msg in parse_func(d):
+                # Filter Logic
+                score, is_val, category = filter.evaluate_psych_signal(
+                    msg['content'], msg['sender'], config, subject['identifiers']
+                )
+                if not is_val:
+                    total_filtered += 1
                     continue
-                # Add the score to the message dictionary so it gets saved in the YAML
-                msg['psych_score'] = psych_score
-            else:
-                msg['psych_score'] = 5.0 # Give AI interactions a default high score
-            # ----------------------
+                
+                # Identity Discovery Logic
+                is_subject = any(ident.lower() in msg['sender'].lower() for ident in subject['identifiers'])
+                if is_subject and msg['sender'] not in subject['identifiers']:
+                    subject['identifiers'].append(msg['sender'])
+                    new_identifiers_found = True
+                    print(f" [DISCOVERY] New identifier for {subject['target_name']}: {msg['sender']}")
 
-            # Fetch Context from Engines
-            coord = timeline.get_closest_coordinate(timeline_index, msg['timestamp'])
-            physio = health.get_closest_health_metrics(health_index, msg['timestamp'])
-            
-            # ... (The rest of the writing logic remains exactly the same, 
-            # just add `f"  psych_score: {msg['psych_score']}\n"` to your YAML output block)            
-            # Format Data
-            lat, lon, acc = (coord[1], coord[2], coord[3]) if coord else ("null", "null", "null")
-            clean_time = datetime.fromtimestamp(msg['timestamp'], tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-            safe_sender = "".join(c for c in msg['sender'] if c.isalnum() or c in (' ', '_'))
-            
-            filename = f"{msg['platform']}_{safe_sender}_{int(msg['timestamp'])}.md"
-            out_path = os.path.join(args.output, filename)
-            
-            # Write Vector-Ready Markdown
-            with open(out_path, 'w', encoding='utf-8') as f:
-                f.write("---\n")
-                f.write(f"type: {msg.get('type', 'message')}\n")
-                f.write(f"platform: {msg['platform']}\n")
-                f.write(f"sender: {msg['sender']}\n")
-                f.write(f"timestamp: {clean_time}\n")
-                f.write(f"psych_score: {msg['psych_score']}\n")
+                msg['psych_score'] = score
+                platform_folder = os.path.join(args_output, msg['platform'].replace(" ", "_"))
+                os.makedirs(platform_folder, exist_ok=True)
+
+                # Context Lookup (Dual Layer)
+                # Forensic Anchor (Strict 60s)
+                f_coord = timeline.get_closest_coordinate(t_index, msg['timestamp'], max_delta_seconds=60)
+                f_phys = health.get_closest_health_metrics(h_index, msg['timestamp'], max_delta_seconds=60)
                 
-                f.write("location:\n")
-                f.write(f"  latitude: {lat}\n")
-                f.write(f"  longitude: {lon}\n")
-                f.write(f"  accuracy_meters: {acc}\n")
+                # General Context (Loose 1h)
+                g_coord = timeline.get_closest_coordinate(t_index, msg['timestamp'], max_delta_seconds=3600)
                 
-                f.write("physiology:\n")
-                if physio:
-                    for metric, value in physio.items():
-                        f.write(f"  {metric}: {value}\n")
-                else:
-                    f.write("  data: null\n")
+                # Confidence Calculation
+                # If we have a forensic match, confidence is high.
+                conf = 0.0
+                if f_coord or f_phys: conf = 0.9
+                elif g_coord: conf = 0.4
+                
+                lat, lon, acc = (g_coord[1], g_coord[2], g_coord[3]) if g_coord else ("null", "null", "null")
+                if f_coord: lat, lon, acc = f_coord[1], f_coord[2], f_coord[3]
+
+                hr_val = f_phys.get('heart_rate') or f_phys.get('heart_rate.heart_rate')
+                state = get_behavioral_state(hr_val)
+                
+                ts_str = datetime.fromtimestamp(msg['timestamp'], tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+                safe_s = "".join(c for c in msg['sender'] if c.isalnum() or c in (' ', '_'))[:50].strip()
+                f_name = f"{msg['platform']}_{safe_s}_{int(msg['timestamp'])}_{uuid.uuid4().hex[:6]}.md"
+                
+                with open(os.path.join(platform_folder, f_name), 'w', encoding='utf-8') as f:
+                    f.write("---\n")
+                    f.write(f"platform: {msg['platform']}\n")
+                    f.write(f"sender: \"{msg['sender']}\"\n")
+                    f.write(f"timestamp: {ts_str}\n")
+                    f.write(f"subject_match: {is_subject}\n")
+                    f.write(f"psych_score: {msg['psych_score']:.2f}\n")
+                    f.write(f"category: {category}\n")
+                    f.write(f"context_confidence: {conf}\n")
+                    f.write(f"behavioral_state: {state}\n")
+                    f.write(f"location:\n  lat: {lat}\n  lon: {lon}\n  accuracy: {acc}\n")
                     
-                f.write("---\n\n")
-                f.write(msg['content'])
-            
-            total_files += 1
+                    if h_index: # Only log physiology if health data exists for subject
+                        f.write("physiology:\n")
+                        if f_phys:
+                            for k, v in f_phys.items(): f.write(f"  {k}: {v}\n")
+                        else:
+                            f.write("  data: null\n")
+                    
+                    f.write(f"---\n\n[[{msg['sender']}]]\n\n{msg['content']}")
+                
+                parser_count += 1
+                total_processed += 1
+        if parser_count > 0:
+            print(f" [PARSER] {name.upper()}: Processed {parser_count} behavioral events.")
 
-    # 6. Cleanup
-    print("\nCleaning up temporary files...")
+    # 4. EXPORT & CLEANUP
+    if new_identifiers_found:
+        update_subject_profile(subject)
+        
+    print(f"\n--- Phase 3: Finalizing ---")
+    timeline.export_lean_records(t_index, args_output)
+    health.export_health_records(h_index, args_output)
+    
     shutil.rmtree(temp_dir, ignore_errors=True)
-    print(f"\nSuccess! EgoWeaver generated {total_files} multidimensional files in '{args.output}'.")
+    print(f" [DONE] Processed: {total_processed} | Filtered: {total_filtered}")
 
 if __name__ == "__main__":
     main()

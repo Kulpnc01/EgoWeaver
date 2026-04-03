@@ -1,0 +1,6 @@
+# EgoWeaver 2.0 Dependencies
+customtkinter==5.2.2
+ijson==3.2.3
+
+# Standard library modules (no install required):
+# argparse, json, os, shutil, uuid, zipfile, datetime, mailbox, re, email, xml, csv, bisect, threading

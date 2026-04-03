@@ -94,11 +94,9 @@ def main():
 
     # 2. INDICES
     print(f"\n--- Phase 1: Context Indexing ---")
-    p_time = os.path.join(args_input, "timeline")
-    p_health = os.path.join(args_input, "health")
     
-    t_index = timeline.build_index(p_time, temp_dir)
-    h_index = health.build_health_index(p_health, temp_dir)
+    t_index = timeline.build_index(args_input, temp_dir)
+    h_index = health.build_health_index(args_input, temp_dir)
     
     print(f" [DATA] Timeline Index: {len(t_index)} points loaded.")
     print(f" [DATA] Health Index: {len(h_index)} metrics loaded.")
@@ -117,11 +115,12 @@ def main():
     new_identifiers_found = False
 
     for parse_func, name in parsers:
-        p_dir = os.path.join(args_input, name)
-        targets = [d for d in [temp_dir, p_dir] if os.path.exists(d)]
+        # We now scan the entire Input dir recursively for each parser
+        targets = [temp_dir, args_input]
         
         parser_count = 0
         for d in targets:
+            if not os.path.exists(d): continue
             for msg in parse_func(d):
                 # Filter Logic
                 score, is_val, category = filter.evaluate_psych_signal(
@@ -133,6 +132,8 @@ def main():
                 
                 # Identity Discovery Logic
                 is_subject = any(ident.lower() in msg['sender'].lower() for ident in subject['identifiers'])
+                
+                # If they ARE a subject but the specific handle isn't in our list yet, learn it.
                 if is_subject and msg['sender'] not in subject['identifiers']:
                     subject['identifiers'].append(msg['sender'])
                     new_identifiers_found = True
@@ -193,10 +194,27 @@ def main():
             print(f" [PARSER] {name.upper()}: Processed {parser_count} behavioral events.")
 
     # 4. EXPORT & CLEANUP
+    print(f"\n--- Phase 3: Finalizing & Exporting Master Context ---")
+    
+    # Generate Master Record for the current Subject
+    master_record = {
+        "subject_profile": subject,
+        "spatial_history": [
+            {"ts": e[0], "lat": e[1], "lon": e[2], "acc": e[3]} for e in t_index
+        ],
+        "physiology_telemetry": [
+            {"ts": e[0], "metric": e[1], "val": e[2]} for e in h_index
+        ],
+        "last_weaving_event": datetime.now(timezone.utc).isoformat()
+    }
+    
+    # Save directly into the root output folder for easy retrieval
+    with open(os.path.join(args_output, "subject_master_record.json"), 'w', encoding='utf-8') as f:
+        json.dump(master_record, f, indent=4)
+
     if new_identifiers_found:
         update_subject_profile(subject)
         
-    print(f"\n--- Phase 3: Finalizing ---")
     timeline.export_lean_records(t_index, args_output)
     health.export_health_records(h_index, args_output)
     

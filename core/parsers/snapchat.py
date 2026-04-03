@@ -17,41 +17,41 @@ def parse(extract_dir):
             daily_chats = {}
 
             # Handle New Format: Dictionary of usernames/threads
-            if isinstance(data, dict) and not any(k in data for k in ['Received Saved Chat History', 'Sent Saved Chat History']):
+            old_categories = ['Received Saved Chat History', 'Sent Saved Chat History']
+            is_new_format = isinstance(data, dict) and not any(k in data for k in old_categories)
+
+            if is_new_format:
                 for thread_name, messages in data.items():
                     if not isinstance(messages, list): continue
                     for msg in messages:
                         content = msg.get('Content') or msg.get('Text') or ""
                         media_type = msg.get('Media Type', 'TEXT')
-                        
-                        if not content and media_type != 'TEXT':
-                            content = f"[{media_type}]"
+                        if not content and media_type != 'TEXT': content = f"[{media_type}]"
                         if not content: continue
 
                         try:
-                            # New format: "2026-03-01 06:58:20 UTC"
                             clean_time = msg.get('Created', '').replace(' UTC', '')
                             dt = datetime.strptime(clean_time, '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
                             ts = dt.timestamp()
                             date_str = dt.strftime("%Y-%m-%d")
-                        except (ValueError, AttributeError): continue
+                        except: continue
 
-                        sender = msg.get('From', 'Unknown')
-
+                        sender = msg.get('From', thread_name)
                         if date_str not in daily_chats:
-                            daily_chats[date_str] = {"timestamp": ts, "messages": []}
-                        daily_chats[date_str]['messages'].append({"ts": ts, "text": f"[{sender}]: {content}"})
+                            daily_chats[date_str] = {"messages": []}
+                        daily_chats[date_str]['messages'].append({
+                            "ts": ts, 
+                            "sender_raw": sender, 
+                            "text_only": content
+                        })
 
             # Handle Old Format: Category-based
             else:
-                categories = ['Received Saved Chat History', 'Sent Saved Chat History']
-                for category in categories:
+                for category in old_categories:
                     for msg in data.get(category, []):
                         content = msg.get('Text') or msg.get('Content') or ""
                         media_type = msg.get('Media Type', 'TEXT')
-                        
-                        if not content and media_type != 'TEXT':
-                            content = f"[{media_type}]"
+                        if not content and media_type != 'TEXT': content = f"[{media_type}]"
                         if not content: continue
 
                         try:
@@ -59,23 +59,24 @@ def parse(extract_dir):
                             dt = datetime.strptime(clean_time, '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
                             ts = dt.timestamp()
                             date_str = dt.strftime("%Y-%m-%d")
-                        except (ValueError, AttributeError): continue
+                        except: continue
 
                         sender = msg.get('From', 'Unknown')
-
                         if date_str not in daily_chats:
-                            daily_chats[date_str] = {"timestamp": ts, "messages": []}
-                        daily_chats[date_str]['messages'].append({"ts": ts, "text": f"[{sender}]: {content}"})
+                            daily_chats[date_str] = {"messages": []}
+                        daily_chats[date_str]['messages'].append({
+                            "ts": ts, 
+                            "sender_raw": sender, 
+                            "text_only": content
+                        })
 
+            # Yield individual messages for better anchoring and discovery
             for date_str in sorted(daily_chats.keys()):
-                chat_data = daily_chats[date_str]
-                chat_data['messages'].sort(key=lambda x: x['ts'])
-                joined = "\n".join([m['text'] for m in chat_data['messages']])
-                
-                yield {
-                    "platform": "Snapchat",
-                    "timestamp": chat_data['timestamp'],
-                    "sender": "Snapchat Thread",
-                    "content": joined,
-                    "type": "message"
-                }
+                for msg_item in daily_chats[date_str]['messages']:
+                    yield {
+                        "platform": "Snapchat",
+                        "timestamp": msg_item['ts'],
+                        "sender": msg_item['sender_raw'],
+                        "content": msg_item['text_only'],
+                        "type": "message"
+                    }

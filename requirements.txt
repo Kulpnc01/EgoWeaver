@@ -1,0 +1,4 @@
+# JSON Iterative Parser for streaming massive Google Takeout files without memory crashes
+ijson==3.2.3
+
+# All other modules (mailbox, bisect, sqlite3, zipfile) rely exclusively on Python's standard library.
